@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="es-AR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Prueba 3D en el teléfono</title>
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="data:,">
+<style>
+  :root { --bg: #f6f7f5; --fg: #17201a; --muted: #5b665e; --line: #d5dbd6; --accent: #1f6f50; --hud: rgb(0 0 0 / .62); }
+  @media (prefers-color-scheme: dark) { :root { --bg: #121614; --fg: #e8ece9; --muted: #9aa59d; --line: #2c342f; --accent: #5cc49a; } }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg); font: 16px/1.45 system-ui, sans-serif; }
+  #view { position: fixed; inset: 0; display: none; background: #000; }
+  body.running #view { display: block; }
+  body.running main { display: none; }
+  #hud { position: fixed; inset-block-start: max(8px, env(safe-area-inset-top)); inset-inline-start: 8px; z-index: 10; display: none;
+         background: var(--hud); color: #fff; padding: 6px 10px; border-radius: 8px; font: 13px/1.35 ui-monospace, monospace; }
+  body.running #hud { display: block; }
+  main { max-inline-size: 46rem; margin-inline: auto; padding: 16px; }
+  h1 { font-size: 1.35rem; margin: .2rem 0 .4rem; text-wrap: balance; }
+  p { margin: .4rem 0; }
+  .muted { color: var(--muted); font-size: .9rem; }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
+  button { font: inherit; min-block-size: 44px; padding: 8px 14px; border-radius: 10px; border: 1px solid var(--line); background: transparent; color: var(--fg); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+  .copy { position: relative; display: inline-flex; align-items: center; gap: 8px; }
+  .tip { font-size: .9rem; color: var(--accent); }
+  .table-wrap { overflow-x: auto; }
+  table { border-collapse: collapse; font-size: .85rem; inline-size: 100%; }
+  th, td { border-block-end: 1px solid var(--line); padding: 4px 6px; text-align: end; white-space: nowrap; }
+  th:first-child, td:first-child, th:nth-child(2), td:nth-child(2) { text-align: start; }
+  pre { white-space: pre-wrap; word-break: break-all; font-size: .72rem; max-block-size: 12rem; overflow: auto; border: 1px solid var(--line); padding: 8px; border-radius: 8px; }
+</style>
+<link rel="modulepreload" href="app.js">
+</head>
+<body>
+<div id="view"></div>
+<div id="hud" aria-live="off"></div>
+<main>
+  <h1>Prueba 3D en el teléfono: río Paraguay, Confluencia a Asunción</h1>
+  <p>Mide cómo anda la vista 3D en este teléfono. Corre sola unos 3 minutos: primero CesiumJS, después MapLibre, cada uno con tres recorridos de 25 segundos.</p>
+  <ol>
+    <li>Tocá <strong>Empezar</strong> y no toques la pantalla hasta que vuelva esta página.</li>
+    <li>Tocá <strong>Copiar resultados</strong> y mandá el texto.</li>
+    <li>Opcional: poné el modo avión, recargá la página y repetí 1 y 2 (prueba sin conexión).</li>
+  </ol>
+  <div class="row">
+    <button type="button" class="primary" id="start">Empezar</button>
+    <button type="button" id="only-cesium">Solo CesiumJS</button>
+    <button type="button" id="only-maplibre">Solo MapLibre</button>
+    <button type="button" id="clear">Borrar resultados</button>
+  </div>
+  <h2 style="font-size:1.05rem">Resultados</h2>
+  <div class="table-wrap"><table id="table"><thead><tr><th>Modo</th><th>Recorrido</th><th>fps med.</th><th>fps p5</th><th>heap MB</th><th>MB</th><th>MB/min</th><th>fallidas</th></tr></thead><tbody></tbody></table></div>
+  <p class="muted" id="firstview"></p>
+  <div class="row">
+    <span class="copy">
+      <button type="button" class="primary" id="copy" command="--copy" commandfor="json">Copiar resultados</button>
+      <span class="tip" role="status"></span>
+    </span>
+  </div>
+  <pre id="json"></pre>
+  <p class="muted">Datos: Natural Earth (dominio público); elevación AWS Terrain Tiles (Mapzen/Tilezen; SRTM y GMTED2010 cortesía de USGS). Prototipo T1-01, no es un producto.</p>
+</main>
+<script type="module" src="app.js"></script>
+</body>
+</html>

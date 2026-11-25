@@ -1,0 +1,43 @@
+{
+ "stretch": "S4 Paraguay River, Confluencia to Asunción (data/B2-01/datum_by_stretch.csv row 5)",
+ "centreline_source": "Natural Earth 10 m ne_10m_rivers_lake_centerlines.geojson, feature name 'Paraná' (rivernum 36), part 0 (the Paraguay River)",
+ "confluencia_point": [
+  -58.604848,
+  -27.314386
+ ],
+ "confluencia_rule": "end point of the upper 'Paraná' River feature in the same file",
+ "asuncion_point": [
+  -57.625834,
+  -25.290671
+ ],
+ "asuncion_rule": "Natural Earth 10 m populated places simple, name 'Asunción', Paraguay; the centreline vertex nearest to it ends S4",
+ "vertices": 164,
+ "centreline_length_km": 344.1,
+ "bbox_centreline_deg": [
+  -58.659088,
+  -27.316257,
+  -57.557688,
+  -25.265558
+ ],
+ "buffer_deg": 0.05,
+ "bbox_tileset_deg": [
+  -58.709088,
+  -27.366257,
+  -57.507688,
+  -25.215558
+ ],
+ "dem": {
+  "source": "AWS Terrain Tiles (Mapzen/Tilezen terrarium)",
+  "url_template": "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png",
+  "zoom": 12,
+  "tiles_downloaded": 392,
+  "min_m": -176.0,
+  "max_m": 343.0
+ },
+ "tileset": {
+  "levels": 5,
+  "grid": 49,
+  "files": 342,
+  "bytes": 22983771
+ }
+}
