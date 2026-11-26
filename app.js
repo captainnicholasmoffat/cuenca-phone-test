@@ -6,10 +6,17 @@ const PATH_SECONDS = Number(params.get('secs')) || 25;
 const FIRST_VIEW_TIMEOUT_S = 120;
 // T1-02: one render pixel ratio for every mode, so engines compare like with like (brief-check change 5a). Default 1 = CSS pixels.
 const PIXEL_RATIO = Number(params.get('pr')) || 1;
-// T1-02 "Google 3D": the key is read only from this page's address at run time; it is never stored or copied.
+// T1-02 "Google 3D": the key is read only from this page's address at run time. It is not put in the results or in
+// localStorage, and the service worker does not cache addresses that carry it; it does stay in the browser's history.
 const GOOGLE_KEY = params.get('gkey');
 const MODES = ['cesium', 'maplibre', 'realista', 'google3d'];
 const DEM_TILES = 'https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png';
+const FIRST_VIEW_RULE = {
+  cesium: 'first frame after the opening view with tileset.tilesLoaded true, from navigation start',
+  maplibre: 'first map idle after the opening view, from navigation start',
+  realista: 'first frame after the opening view with globe.tilesLoaded true, from navigation start',
+  google3d: 'first gmp-steadychange with isSteady true after the opening view, from navigation start (untested)',
+};
 const ION_HOSTS = /(^|\.)(cesium\.com|ion\.cesium\.com|virtualearth\.net|bing\.com|googleapis\.com|google\.com)$/;
 
 const $ = (id) => document.getElementById(id);
@@ -233,7 +240,10 @@ function terrariumProvider(C) {
   const tile = (z, x, y) => {
     const k = `${z}/${x}/${y}`;
     if (!cache.has(k)) cache.set(k, fetch(DEM_TILES.replace('{z}', z).replace('{x}', x).replace('{y}', y))
-      .then((r) => r.blob()).then(createImageBitmap).then((bmp) => { ctx.drawImage(bmp, 0, 0); return ctx.getImageData(0, 0, 256, 256).data; }));
+      .then((r) => { if (!r.ok) throw new Error(`terrain tile ${k}: HTTP ${r.status}`); return r.blob(); })
+      .then(createImageBitmap).then((bmp) => { ctx.drawImage(bmp, 0, 0); return ctx.getImageData(0, 0, 256, 256).data; })
+      .catch((e) => { cache.delete(k); throw e; })); // a failed tile is retried on the next request, not cached
+    if (cache.size > 64) cache.delete(cache.keys().next().value); // cap: 64 × 256 KB decoded; Cesium keeps its own terrain cache
     return cache.get(k);
   };
   return new C.CustomHeightmapTerrainProvider({
@@ -330,7 +340,7 @@ async function startGoogle3d(view, line, first) {
   view.append(map);
   const setCamera = (c) => Object.assign(map, cam(c));
   // first full view: Google's steady event if it fires (untested here: no key in this environment)
-  const ok = await withTimeout(new Promise((r) => map.addEventListener('gmp-steadychange', (e) => { if (e.isSteady) r(); })), 30);
+  const ok = await withTimeout(new Promise((r) => map.addEventListener('gmp-steadychange', (e) => { if (e.isSteady) r(); })), FIRST_VIEW_TIMEOUT_S);
   return { setCamera, firstViewOk: ok, canvas: () => 'not reported (inside the Google element)' };
 }
 
@@ -362,11 +372,15 @@ async function runMode(mode, auto) {
     test: mode === 'realista' || mode === 'google3d' ? 'T1-02' : 'T1-01', mode, offline: !navigator.onLine, served_from_cache_only: load.requests_network === 0 && load.requests_cache > 0,
     date: new Date().toISOString(), path_seconds: PATH_SECONDS, service_worker: sw,
     first_full_view_s: engine.firstViewOk ? +firstView.toFixed(2) : `timeout after ${FIRST_VIEW_TIMEOUT_S} s`,
-    first_full_view_rule: mode === 'cesium' ? 'first frame after the opening view with tileset.tilesLoaded true, from navigation start' : 'first map idle after the opening view, from navigation start',
+    first_full_view_rule: FIRST_VIEW_RULE[mode],
     load, paths: results, canvas_px: engine.canvas(), pixel_ratio: mode === 'google3d' ? 'not set (Google element)' : PIXEL_RATIO, hosts,
     cesium_ion_or_google_requests: Object.entries(hosts).filter(([h]) => ION_HOSTS.test(h.split(':')[0])).reduce((a, [, n]) => a + n, 0),
     device: await device(),
   };
+  if (mode === 'google3d') { // Google requests bypass the service worker, so its byte and request counts would read near 0
+    for (const o of [result.load, ...result.paths]) for (const k of ['mb_network', 'mb_per_min', 'requests_network']) if (k in o) o[k] = 'not counted';
+    Object.assign(result, { cesium_ion_or_google_requests: 'not counted', network_note: 'Google requests bypass the service worker: not counted' });
+  }
   const all = loadResults(); all.push(result); saveResults(all);
   window.__t1last = result;
   const next = { cesium: 'maplibre', maplibre: 'realista' }[mode];
@@ -408,7 +422,7 @@ $('start').addEventListener('click', () => location.assign('?mode=cesium&auto=1'
 $('only-cesium').addEventListener('click', () => location.assign('?mode=cesium'));
 $('only-maplibre').addEventListener('click', () => location.assign('?mode=maplibre'));
 $('only-realista').addEventListener('click', () => location.assign('?mode=realista'));
-$('google3d').addEventListener('click', () => { // the key stays in the address only; it is never saved
+$('google3d').addEventListener('click', () => { // the key travels in the address only (not cached by sw.js, not in results); it stays in browser history
   if (GOOGLE_KEY) location.assign(`?mode=google3d&gkey=${encodeURIComponent(GOOGLE_KEY)}`);
   else $('google-tip').textContent = 'Falta la clave: abrí esta página con ?gkey=TU_CLAVE en la dirección.';
 });
