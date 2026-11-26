@@ -4,6 +4,11 @@ const KEY = 't1-01-results';
 const params = new URLSearchParams(location.search);
 const PATH_SECONDS = Number(params.get('secs')) || 25;
 const FIRST_VIEW_TIMEOUT_S = 120;
+// T1-02: one render pixel ratio for every mode, so engines compare like with like (brief-check change 5a). Default 1 = CSS pixels.
+const PIXEL_RATIO = Number(params.get('pr')) || 1;
+// T1-02 "Google 3D": the key is read only from this page's address at run time; it is never stored or copied.
+const GOOGLE_KEY = params.get('gkey');
+const MODES = ['cesium', 'maplibre', 'realista', 'google3d'];
 const DEM_TILES = 'https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png';
 const ION_HOSTS = /(^|\.)(cesium\.com|ion\.cesium\.com|virtualearth\.net|bing\.com|googleapis\.com|google\.com)$/;
 
@@ -173,7 +178,8 @@ async function startCesium(view, line, first) {
   await loadScript('lib/cesium/Cesium.js');
   const C = window.Cesium;
   C.Ion.defaultAccessToken = '';
-  const widget = new C.CesiumWidget(view, { baseLayer: false, scene3DOnly: true, requestRenderMode: false });
+  const widget = new C.CesiumWidget(view, { baseLayer: false, scene3DOnly: true, requestRenderMode: false, useBrowserRecommendedResolution: false });
+  widget.resolutionScale = PIXEL_RATIO / devicePixelRatio;
   widget.scene.globe.baseColor = C.Color.fromCssColorString('#1d2730');
   const tileset = await C.Cesium3DTileset.fromUrl('tiles/tileset.json');
   widget.scene.primitives.add(tileset);
@@ -197,7 +203,7 @@ async function startMapLibre(view, line, first) {
   const dem = { type: 'raster-dem', tiles: [DEM_TILES], encoding: 'terrarium', tileSize: 256, maxzoom: 12,
     attribution: 'Elevación: AWS Terrain Tiles (Mapzen/Tilezen; USGS SRTM, GMTED2010) · Río: Natural Earth' };
   const map = new ml.Map({
-    container: view, maxPitch: 89, attributionControl: { compact: true },
+    container: view, maxPitch: 89, attributionControl: { compact: true }, pixelRatio: PIXEL_RATIO,
     style: { version: 8,
       sources: { dem, hs: { ...dem }, river: { type: 'geojson', data: { type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: line } } } },
       layers: [
@@ -217,9 +223,120 @@ async function startMapLibre(view, line, first) {
   return { setCamera, firstViewOk: ok, canvas: () => [canvas.width, canvas.height] };
 }
 
+// ---------- T1-02 realista: CesiumJS + open imagery on open terrain, our own water surface and convoy ----------
+// Terrain: AWS terrarium tiles decoded in the page (the MapLibre mode's source). shortcut: tile edges are sampled
+// independently, so neighbours can differ by one DEM pixel; Cesium's skirts hide the crack. Upgrade: a quantized-mesh build.
+function terrariumProvider(C) {
+  const N = 33, MAXZ = 12;
+  const ctx = new OffscreenCanvas(256, 256).getContext('2d', { willReadFrequently: true });
+  const cache = new Map();
+  const tile = (z, x, y) => {
+    const k = `${z}/${x}/${y}`;
+    if (!cache.has(k)) cache.set(k, fetch(DEM_TILES.replace('{z}', z).replace('{x}', x).replace('{y}', y))
+      .then((r) => r.blob()).then(createImageBitmap).then((bmp) => { ctx.drawImage(bmp, 0, 0); return ctx.getImageData(0, 0, 256, 256).data; }));
+    return cache.get(k);
+  };
+  return new C.CustomHeightmapTerrainProvider({
+    width: N, height: N, tilingScheme: new C.WebMercatorTilingScheme(),
+    callback: async (x, y, level) => {
+      const z = Math.min(level, MAXZ), f = 2 ** (level - z);
+      const px = await tile(z, Math.floor(x / f), Math.floor(y / f));
+      const ox = (x % f) * 256 / f, oy = (y % f) * 256 / f, span = 256 / f;
+      const h = new Float32Array(N * N);
+      for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) {
+        // bilinear: nearest sampling made 1-pixel steps (walls) below zoom 12, seen in the first horizon screenshot
+        const u = Math.min(254.999, ox + i * span / (N - 1)), v = Math.min(254.999, oy + j * span / (N - 1));
+        const u0 = Math.floor(u), v0 = Math.floor(v), fu = u - u0, fv = v - v0;
+        const e = (uu, vv) => { const o = (vv * 256 + uu) * 4; return px[o] * 256 + px[o + 1] + px[o + 2] / 256 - 32768; };
+        const val = (e(u0, v0) * (1 - fu) + e(u0 + 1, v0) * fu) * (1 - fv) + (e(u0, v0 + 1) * (1 - fu) + e(u0 + 1, v0 + 1) * fu) * fv;
+        h[j * N + i] = Math.max(0, val); // negative DEM spikes clipped to 0
+      }
+      return h;
+    },
+  });
+}
+
+const waterLevel = (lat) => 47 + (lat + 27.316) / (27.316 - 25.266) * 11 + 1;
+
+async function startRealista(view, line, first) {
+  window.CESIUM_BASE_URL = new URL('lib/cesium/', location.href).href;
+  document.head.append(Object.assign(document.createElement('link'), { rel: 'stylesheet', href: 'lib/cesium/Widgets/widgets.css' }));
+  await loadScript('lib/cesium/Cesium.js');
+  const C = window.Cesium;
+  C.Ion.defaultAccessToken = '';
+  const widget = new C.CesiumWidget(view, { baseLayer: false, scene3DOnly: true, requestRenderMode: false, useBrowserRecommendedResolution: false,
+    terrainProvider: terrariumProvider(C) });
+  widget.resolutionScale = PIXEL_RATIO / devicePixelRatio;
+  const scene = widget.scene;
+  scene.globe.baseColor = C.Color.fromCssColorString('#4a5a3a');
+  // draw only the S4 box that the imagery covers; outside it the single-tile layers smeared their edge pixels
+  const box = await (await fetch('realista/img_base.json')).json();
+  scene.globe.cartographicLimitRectangle = C.Rectangle.fromDegrees(box.west, box.south, box.east, box.north);
+  const credit = '© ESA WorldCover project / Contains modified Copernicus Sentinel data (2021) processed by ESA WorldCover consortium (CC BY 4.0)';
+  for (const name of ['img_base', 'img_lowpass', 'img_horizon']) {
+    const m = await (await fetch(`realista/${name}.json`)).json();
+    const rectangle = C.Rectangle.fromDegrees(m.west, m.south, m.east, m.north);
+    // the layer's own rectangle stops Cesium from stretching the image's edge pixels across the globe (seen in the first screenshots)
+    widget.imageryLayers.add(new C.ImageryLayer(await C.SingleTileImageryProvider.fromUrl(`realista/${name}.jpg`, {
+      rectangle, credit: name === 'img_base' ? credit : undefined }), { rectangle }));
+  }
+  // water: river polygon traced from ESA WorldCover class 80, drawn with Cesium's animated water material on the terrain
+  const water = await (await fetch('realista/water.geojson')).json();
+  // A flat sheet at a water level that falls linearly from Asunción to Confluencia, 1 m over the DEM's own water surface.
+  // A GroundPrimitive draped on the terrain drew a slab with a wall in the horizon view (first screenshots), so it was dropped.
+  // shortcut: the level is a straight line between two DEM samples (58 m at Asunción, 47 m at Confluencia, terrarium z12);
+  // upgrade to gauge levels (hydrometric stations) for a real twin.
+  const ring = (r) => C.Cartesian3.fromDegreesArrayHeights(r.flatMap(([lon, lat]) => [lon, lat, waterLevel(lat)]));
+  const instances = water.features.map((f) => new C.GeometryInstance({ geometry: new C.PolygonGeometry({ perPositionHeight: true,
+    polygonHierarchy: new C.PolygonHierarchy(ring(f.geometry.coordinates[0]), f.geometry.coordinates.slice(1).map((r) => new C.PolygonHierarchy(ring(r)))) }) }));
+  scene.primitives.add(new C.Primitive({ geometryInstances: instances, appearance: new C.MaterialAppearance({
+    material: new C.Material({ fabric: { type: 'Water', uniforms: {
+      baseWaterColor: C.Color.fromCssColorString('#6b6343').withAlpha(0.9), blendColor: C.Color.fromCssColorString('#7a7350'),
+      normalMap: C.buildModuleUrl('Assets/Textures/waterNormals.jpg'), frequency: 2000, animationSpeed: 0.02, amplitude: 3, specularIntensity: 0.35 } } }) }) }));
+  // one push convoy at real dimensions (3 x 3 barges of 60 x 11 m + 40 m pusher), in the low-pass view
+  const cum = [0]; for (let i = 1; i < line.length; i++) cum.push(cum[i - 1] + dist(line[i - 1], line[i]));
+  const along = (m) => { const i = cum.findIndex((c) => c >= m); const f = (m - cum[i - 1]) / (cum[i] - cum[i - 1]);
+    return [line[i - 1][0] + f * (line[i][0] - line[i - 1][0]), line[i - 1][1] + f * (line[i][1] - line[i - 1][1])]; };
+  // on the centreline 1.5 km ahead of the low pass's mid-point; the coarse line near Asunción runs over the city, not the river (rule-6 check)
+  const at = along(16500), hdg = bearing(at, along(16800));
+  const model = await C.Model.fromGltfAsync({ url: 'realista/convoy.glb',
+    modelMatrix: C.Transforms.headingPitchRollToFixedFrame(C.Cartesian3.fromDegrees(at[0], at[1], waterLevel(at[1])), new C.HeadingPitchRoll(rad(hdg - 90), 0, 0)) });
+  scene.primitives.add(model);
+  window.__t1convoy = { lon: at[0], lat: at[1], heading: hdg };
+  const setCamera = (c) => widget.camera.setView({ destination: C.Cartesian3.fromDegrees(c.lon, c.lat, c.alt),
+    orientation: { heading: rad(c.heading), pitch: rad(c.pitch), roll: 0 } });
+  setCamera(first);
+  let frames = 0;
+  const loaded = new Promise((r) => { const off = scene.postRender.addEventListener(() => { if (++frames > 2 && scene.globe.tilesLoaded) { off(); r(); } }); });
+  const ok = await withTimeout(loaded, FIRST_VIEW_TIMEOUT_S);
+  window.__t1scene = { widget, C };
+  return { setCamera, firstViewOk: ok, canvas: () => [widget.canvas.width, widget.canvas.height] };
+}
+
+// ---------- T1-02 Google 3D (Maps JavaScript 3D Maps): runs only with a key given in the address ----------
+async function startGoogle3d(view, line, first) {
+  if (!GOOGLE_KEY) throw new Error('Google 3D needs a key in the address (?mode=google3d&gkey=...)');
+  await new Promise((ok, fail) => {
+    window.__t1g = ok;
+    document.head.append(Object.assign(document.createElement('script'), { async: true, onerror: () => fail(new Error('Google Maps script failed to load')),
+      src: `https://maps.googleapis.com/maps/api/js?loading=async&libraries=maps3d&callback=__t1g&key=${encodeURIComponent(GOOGLE_KEY)}` }));
+  });
+  const { Map3DElement } = await google.maps.importLibrary('maps3d');
+  const cam = (c) => { // our camera (position + pitch) -> Google's look-at camera (ground centre, range, tilt)
+    const pitch = Math.min(-1, c.pitch), ground = c.alt / Math.tan(rad(-pitch)), p = dest([c.lon, c.lat], c.heading, ground);
+    return { center: { lat: p[1], lng: p[0], altitude: 0 }, range: Math.hypot(ground, c.alt), tilt: 90 + pitch, heading: c.heading };
+  };
+  const map = new Map3DElement({ ...cam(first), mode: 'SATELLITE' });
+  view.append(map);
+  const setCamera = (c) => Object.assign(map, cam(c));
+  // first full view: Google's steady event if it fires (untested here: no key in this environment)
+  const ok = await withTimeout(new Promise((r) => map.addEventListener('gmp-steadychange', (e) => { if (e.isSteady) r(); })), 30);
+  return { setCamera, firstViewOk: ok, canvas: () => 'not reported (inside the Google element)' };
+}
+
 // ---------- run one mode ----------
 async function runMode(mode, auto) {
-  document.body.classList.add('running');
+  document.body.classList.add('running', mode);
   const hudEl = $('hud');
   const hud = (s) => { hudEl.textContent = `${mode} · ${s}`; };
   hud('cargando…');
@@ -228,24 +345,33 @@ async function runMode(mode, auto) {
   const line = (await (await fetch('data/s4.geojson')).json()).features[0].geometry.coordinates;
   const paths = makePaths(line);
   const first = paths[0].cam(0);
-  const engine = await (mode === 'cesium' ? startCesium : startMapLibre)($('view'), line, first);
+  const engine = await ({ cesium: startCesium, maplibre: startMapLibre, realista: startRealista, google3d: startGoogle3d })[mode]($('view'), line, first);
   const firstView = performance.now() / 1000;
   const load = diff(s0, snap());
+  if (params.has('still')) { // screenshot mode (unmeasured): hold one path at its mid-point until the view has loaded
+    const p = paths.find((x) => x.name === params.get('still'));
+    engine.setCamera(p.cam(0.5)); hud(`${p.label} (vista fija)`);
+    const sc = window.__t1scene?.widget.scene, ts = window.__t1tileset;
+    for (let i = 0; i < 600 && !(sc ? sc.globe.tilesLoaded : ts ? ts.tilesLoaded : i > 20); i++) await new Promise((r) => setTimeout(r, 250));
+    window.__t1still = true; return;
+  }
   const results = [];
   for (const p of paths) results.push(await runPath(p, engine.setCamera, hud));
   const hosts = { ...net.hosts };
   const result = {
-    test: 'T1-01', mode, offline: !navigator.onLine, served_from_cache_only: load.requests_network === 0 && load.requests_cache > 0,
+    test: mode === 'realista' || mode === 'google3d' ? 'T1-02' : 'T1-01', mode, offline: !navigator.onLine, served_from_cache_only: load.requests_network === 0 && load.requests_cache > 0,
     date: new Date().toISOString(), path_seconds: PATH_SECONDS, service_worker: sw,
     first_full_view_s: engine.firstViewOk ? +firstView.toFixed(2) : `timeout after ${FIRST_VIEW_TIMEOUT_S} s`,
     first_full_view_rule: mode === 'cesium' ? 'first frame after the opening view with tileset.tilesLoaded true, from navigation start' : 'first map idle after the opening view, from navigation start',
-    load, paths: results, canvas_px: engine.canvas(), hosts,
+    load, paths: results, canvas_px: engine.canvas(), pixel_ratio: mode === 'google3d' ? 'not set (Google element)' : PIXEL_RATIO, hosts,
     cesium_ion_or_google_requests: Object.entries(hosts).filter(([h]) => ION_HOSTS.test(h.split(':')[0])).reduce((a, [, n]) => a + n, 0),
     device: await device(),
   };
   const all = loadResults(); all.push(result); saveResults(all);
   window.__t1last = result;
-  if (auto && mode === 'cesium') { location.replace('?mode=maplibre&auto=1' + (params.get('secs') ? '&secs=' + PATH_SECONDS : '')); return; }
+  const next = { cesium: 'maplibre', maplibre: 'realista' }[mode];
+  const keep = ['secs', 'pr'].filter((k) => params.has(k)).map((k) => `&${k}=${params.get(k)}`).join('');
+  if (auto && next) { location.replace(`?mode=${next}&auto=1${keep}`); return; }
   location.replace('./?done=1');
 }
 
@@ -255,7 +381,7 @@ function render() {
   const body = $('table').tBodies[0];
   body.replaceChildren(...all.flatMap((r) => r.paths.map((p) => {
     const tr = document.createElement('tr');
-    const cells = [r.mode + (r.offline ? ' (sin red)' : ''), p.path, p.fps_median, p.fps_p5, p.heap_peak_mb, p.mb_network, p.mb_per_min, p.requests_failed];
+    const cells = [r.mode + (r.offline ? ' (sin red)' : ''), p.path, p.fps_median, p.fps_p5, p.heap_peak_mb, p.mb_network, p.mb_per_min, p.requests_failed, Array.isArray(r.canvas_px) ? r.canvas_px.join('×') : '—'];
     tr.append(...cells.map((c) => Object.assign(document.createElement('td'), { textContent: c ?? '—' })));
     return tr;
   })));
@@ -281,12 +407,17 @@ if ('CommandEvent' in window) {
 $('start').addEventListener('click', () => location.assign('?mode=cesium&auto=1'));
 $('only-cesium').addEventListener('click', () => location.assign('?mode=cesium'));
 $('only-maplibre').addEventListener('click', () => location.assign('?mode=maplibre'));
+$('only-realista').addEventListener('click', () => location.assign('?mode=realista'));
+$('google3d').addEventListener('click', () => { // the key stays in the address only; it is never saved
+  if (GOOGLE_KEY) location.assign(`?mode=google3d&gkey=${encodeURIComponent(GOOGLE_KEY)}`);
+  else $('google-tip').textContent = 'Falta la clave: abrí esta página con ?gkey=TU_CLAVE en la dirección.';
+});
 $('clear').addEventListener('click', () => { saveResults([]); render(); });
 
 const mode = params.get('mode');
-if (mode === 'cesium' || mode === 'maplibre') {
+if (MODES.includes(mode)) {
   runMode(mode, params.has('auto')).catch((e) => {
-    const all = loadResults(); all.push({ test: 'T1-01', mode, error: String(e && e.stack || e), date: new Date().toISOString(), paths: [] }); saveResults(all);
+    const all = loadResults(); all.push({ test: mode === 'realista' || mode === 'google3d' ? 'T1-02' : 'T1-01', mode, error: String(e && e.stack || e), date: new Date().toISOString(), paths: [] }); saveResults(all);
     location.replace('./?done=1');
   });
 } else {

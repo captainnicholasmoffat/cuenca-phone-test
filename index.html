@@ -30,6 +30,9 @@
   table { border-collapse: collapse; font-size: .85rem; inline-size: 100%; }
   th, td { border-block-end: 1px solid var(--line); padding: 4px 6px; text-align: end; white-space: nowrap; }
   th:first-child, td:first-child, th:nth-child(2), td:nth-child(2) { text-align: start; }
+  #label { position: fixed; inset-block-end: max(8px, env(safe-area-inset-bottom)); inset-inline: 8px auto; z-index: 10; display: none; max-inline-size: 30rem;
+           background: var(--hud); color: #fff; padding: 6px 10px; border-radius: 8px; font: 12px/1.35 system-ui, sans-serif; }
+  body.running.realista #label { display: block; }
   pre { white-space: pre-wrap; word-break: break-all; font-size: .72rem; max-block-size: 12rem; overflow: auto; border: 1px solid var(--line); padding: 8px; border-radius: 8px; }
 </style>
 <link rel="modulepreload" href="app.js">
@@ -37,9 +40,10 @@
 <body>
 <div id="view"></div>
 <div id="hud" aria-live="off"></div>
+<p id="label">Vista 3D armada con imágenes satelitales abiertas (Sentinel-2, 2021, 10 m), relieve abierto, un polígono de agua y un convoy modelado por nosotros a escala. No es una foto. Prototipo.</p>
 <main>
   <h1>Prueba 3D en el teléfono: río Paraguay, Confluencia a Asunción</h1>
-  <p>Mide cómo anda la vista 3D en este teléfono. Corre sola unos 3 minutos: primero CesiumJS, después MapLibre, cada uno con tres recorridos de 25 segundos.</p>
+  <p>Mide cómo anda la vista 3D en este teléfono. Corre sola unos 5 minutos: CesiumJS, MapLibre y el modo «realista», cada uno con tres recorridos de 25 segundos.</p>
   <ol>
     <li>Tocá <strong>Empezar</strong> y no toques la pantalla hasta que vuelva esta página.</li>
     <li>Tocá <strong>Copiar resultados</strong> y mandá el texto.</li>
@@ -49,10 +53,12 @@
     <button type="button" class="primary" id="start">Empezar</button>
     <button type="button" id="only-cesium">Solo CesiumJS</button>
     <button type="button" id="only-maplibre">Solo MapLibre</button>
+    <button type="button" id="only-realista">Solo realista</button>
+    <button type="button" id="google3d">Google 3D (requiere clave)</button>
     <button type="button" id="clear">Borrar resultados</button>
   </div>
   <h2 style="font-size:1.05rem">Resultados</h2>
-  <div class="table-wrap"><table id="table"><thead><tr><th>Modo</th><th>Recorrido</th><th>fps med.</th><th>fps p5</th><th>heap MB</th><th>MB</th><th>MB/min</th><th>fallidas</th></tr></thead><tbody></tbody></table></div>
+  <div class="table-wrap"><table id="table"><thead><tr><th>Modo</th><th>Recorrido</th><th>fps med.</th><th>fps p5</th><th>heap MB</th><th>MB</th><th>MB/min</th><th>fallidas</th><th>píxeles</th></tr></thead><tbody></tbody></table></div>
   <p class="muted" id="firstview"></p>
   <div class="row">
     <span class="copy">
@@ -60,8 +66,9 @@
       <span class="tip" role="status"></span>
     </span>
   </div>
+  <p class="tip" id="google-tip" role="status"></p>
   <pre id="json"></pre>
-  <p class="muted">Datos: Natural Earth (dominio público); elevación AWS Terrain Tiles (Mapzen/Tilezen; SRTM y GMTED2010 cortesía de USGS). Prototipo T1-01, no es un producto.</p>
+  <p class="muted">Datos: Natural Earth (dominio público); elevación AWS Terrain Tiles (Mapzen/Tilezen; SRTM y GMTED2010 cortesía de USGS). Modo realista: © ESA WorldCover project / Contains modified Copernicus Sentinel data (2021) processed by ESA WorldCover consortium (CC BY 4.0). Prototipo T1-01/T1-02, no es un producto.</p>
 </main>
 <script type="module" src="app.js"></script>
 </body>

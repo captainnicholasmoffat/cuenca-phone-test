@@ -10,6 +10,8 @@ self.addEventListener('activate', (event) => event.waitUntil(self.clients.claim(
 self.addEventListener('fetch', (event) => {
   const req = event.request;
   if (req.method !== 'GET' || !req.url.startsWith('http')) return;
+  // T1-02: Google content is never cached (its terms limit caching); the browser fetches it directly.
+  if (/(^|\.)(googleapis|gstatic|google)\.com$/.test(new URL(req.url).hostname)) return;
   event.respondWith(handle(req));
 });
 
