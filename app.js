@@ -239,10 +239,14 @@ function terrariumProvider(C) {
   const cache = new Map();
   const tile = (z, x, y) => {
     const k = `${z}/${x}/${y}`;
-    if (!cache.has(k)) cache.set(k, fetch(DEM_TILES.replace('{z}', z).replace('{x}', x).replace('{y}', y))
-      .then((r) => { if (!r.ok) throw new Error(`terrain tile ${k}: HTTP ${r.status}`); return r.blob(); })
-      .then(createImageBitmap).then((bmp) => { ctx.drawImage(bmp, 0, 0); return ctx.getImageData(0, 0, 256, 256).data; })
-      .catch((e) => { cache.delete(k); throw e; })); // a failed tile is retried on the next request, not cached
+    if (!cache.has(k)) {
+      const p = fetch(DEM_TILES.replace('{z}', z).replace('{x}', x).replace('{y}', y))
+        .then((r) => { if (!r.ok) throw new Error(`terrain tile ${k}: HTTP ${r.status}`); return r.blob(); })
+        .then(createImageBitmap).then((bmp) => { ctx.drawImage(bmp, 0, 0); return ctx.getImageData(0, 0, 256, 256).data; })
+        // a failed tile is retried on the next request, not cached; only its own entry is dropped, not a newer re-request
+        .catch((e) => { if (cache.get(k) === p) cache.delete(k); throw e; });
+      cache.set(k, p);
+    }
     if (cache.size > 64) cache.delete(cache.keys().next().value); // cap: 64 × 256 KB decoded; Cesium keeps its own terrain cache
     return cache.get(k);
   };
